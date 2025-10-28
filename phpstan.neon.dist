@@ -10,3 +10,9 @@ parameters:
     tmpDir: build/phpstan
     checkOctaneCompatibility: true
     checkModelProperties: true
+    ignoreErrors:
+        # Package config files are published to user's config directory
+        # where env() calls are appropriate
+        -
+            identifier: larastan.noEnvCallsOutsideOfConfig
+            path: config/secure-otp.php
