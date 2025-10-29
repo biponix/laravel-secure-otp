@@ -31,11 +31,14 @@ beforeEach(function () {
 
     config(['secure-otp.hash_secret' => 'test-secret-key-for-hmac']);
 
-    // Clear rate limiters using actual config prefix
+    // Clear rate limiters using actual config prefix (both generate and verify contexts)
     $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
-    RateLimiter::clear("{$prefix}:identifier:test@example.com");
-    RateLimiter::clear("{$prefix}:identifier:+1234567890");
-    RateLimiter::clear("{$prefix}:ip:127.0.0.1");
+    RateLimiter::clear("{$prefix}:generate:identifier:test@example.com");
+    RateLimiter::clear("{$prefix}:generate:identifier:+1234567890");
+    RateLimiter::clear("{$prefix}:generate:ip:127.0.0.1");
+    RateLimiter::clear("{$prefix}:verify:identifier:test@example.com");
+    RateLimiter::clear("{$prefix}:verify:identifier:+1234567890");
+    RateLimiter::clear("{$prefix}:verify:ip:127.0.0.1");
 
     // Fake notifications
     Notification::fake();
@@ -392,6 +395,70 @@ describe('verify() method - Security Features', function () {
         expect($result1)->toBeTrue()
             ->and($result2)->toBeFalse();
     });
+
+    it('rate limits verification attempts to prevent brute force', function () {
+        // Generate an OTP
+        $this->otpService->send('test@example.com');
+
+        // Clear generate rate limiter to isolate verify rate limiter
+        $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
+        RateLimiter::clear("{$prefix}:generate:identifier:test@example.com");
+
+        // Try verifying with wrong codes up to the verify rate limit
+        $verifyLimit = config('secure-otp.rate_limits.verify_per_identifier.max_attempts', 5);
+
+        for ($i = 0; $i < $verifyLimit; $i++) {
+            $result = $this->otpService->verify('test@example.com', '000000');
+            expect($result)->toBeFalse(); // Wrong code
+        }
+
+        // Next verification attempt should be rate limited
+        $result = $this->otpService->verify('test@example.com', '999999');
+        expect($result)->toBeFalse();
+
+        // Verify the verify context was used in rate limiter key
+        expect(RateLimiter::attempts("{$prefix}:verify:identifier:test@example.com"))->toBeGreaterThanOrEqual($verifyLimit);
+    });
+
+    it('applies IP rate limiting for verification attempts from same IP', function () {
+        config(['secure-otp.rate_limits.verify_per_ip.max_attempts' => 3]);
+
+        // Simulate HTTP context with a specific IP
+        $request = \Illuminate\Http\Request::create('/test', 'GET', [], [], [], ['REMOTE_ADDR' => '203.0.113.42']);
+        app()->instance('request', $request);
+
+        $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
+        RateLimiter::clear("{$prefix}:verify:ip:203.0.113.42");
+
+        // Generate OTPs for 3 different users
+        $this->otpService->send('user1@example.com');
+        $this->otpService->send('user2@example.com');
+        $this->otpService->send('user3@example.com');
+        $this->otpService->send('user4@example.com');
+
+        // Clear generate rate limiters to isolate verify rate limiter
+        RateLimiter::clear("{$prefix}:generate:identifier:user1@example.com");
+        RateLimiter::clear("{$prefix}:generate:identifier:user2@example.com");
+        RateLimiter::clear("{$prefix}:generate:identifier:user3@example.com");
+        RateLimiter::clear("{$prefix}:generate:identifier:user4@example.com");
+
+        // Try verifying wrong codes from same IP for different users
+        $result1 = $this->otpService->verify('user1@example.com', '000001');
+        $result2 = $this->otpService->verify('user2@example.com', '000002');
+        $result3 = $this->otpService->verify('user3@example.com', '000003');
+
+        // First 3 attempts should process (and fail due to wrong code)
+        expect($result1)->toBeFalse()
+            ->and($result2)->toBeFalse()
+            ->and($result3)->toBeFalse();
+
+        // 4th attempt should be rate limited by IP (even for different user)
+        $result4 = $this->otpService->verify('user4@example.com', '000004');
+        expect($result4)->toBeFalse();
+
+        // Verify IP rate limiter was triggered
+        expect(RateLimiter::attempts("{$prefix}:verify:ip:203.0.113.42"))->toBeGreaterThanOrEqual(3);
+    });
 });
 
 describe('Helper Methods', function () {
@@ -697,8 +764,8 @@ describe('Security Enhancements', function () {
         $result = $this->otpService->send('test@example.com');
         expect($result)->toBeFalse();
 
-        // Verify the custom prefix was used by checking hits
-        expect(RateLimiter::attempts('custom-prefix:identifier:test@example.com'))->toBeGreaterThan(0);
+        // Verify the custom prefix was used by checking hits (includes context 'generate')
+        expect(RateLimiter::attempts('custom-prefix:generate:identifier:test@example.com'))->toBeGreaterThan(0);
     });
 });
 

@@ -182,6 +182,10 @@ final class SecureOtpService
     /**
      * Verify OTP code
      *
+     * Security: Rate limits verification attempts to prevent brute force attacks.
+     * Even though each OTP has max_attempts limit, we also limit verification calls
+     * to prevent attackers from rapidly trying different codes.
+     *
      * @param  string  $identifier  Phone number or email address
      * @param  string  $code  6-digit OTP code
      * @return bool True if verified successfully, false otherwise
@@ -195,6 +199,14 @@ final class SecureOtpService
         $codeLength = config('secure-otp.length', 6);
         if (! preg_match("/^\d{{$codeLength}}$/", $code)) {
             $this->logSecurityEvent('invalid_code_format', $identifier);
+
+            return false;
+        }
+
+        // Rate limit verification attempts (prevent brute force)
+        $rateLimitResult = $this->checkRateLimits($identifier, 'verify');
+        if (! $rateLimitResult['allowed']) {
+            $this->logSecurityEvent('verification_rate_limit_exceeded', $identifier, $rateLimitResult);
 
             return false;
         }
@@ -310,20 +322,41 @@ final class SecureOtpService
     }
 
     /**
-     * Check multi-layer rate limits
+     * Check multi-layer rate limits with context-aware configuration
+     *
+     * Supports context-specific rate limits (e.g., different limits for generate vs verify).
+     * Falls back to shared config if context-specific config is not set.
+     *
+     * @param  string  $identifier  Email or phone number
+     * @param  string  $context  Operation context: 'generate' or 'verify'
+     * @return array{allowed: bool, key?: string, available_in?: int}
      */
-    protected function checkRateLimits(string $identifier): array
+    protected function checkRateLimits(string $identifier, string $context = 'generate'): array
     {
         $ip = $this->getIpAddress();
         $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
 
+        // Try context-specific config first, fall back to shared config
+        // Examples:
+        //   - verify_per_identifier (specific) OR per_identifier (shared)
+        //   - verify_per_ip (specific) OR per_ip (shared)
+        $identifierConfig = config("secure-otp.rate_limits.{$context}_per_identifier")
+            ?? config('secure-otp.rate_limits.per_identifier');
+
+        $ipConfig = config("secure-otp.rate_limits.{$context}_per_ip")
+            ?? config('secure-otp.rate_limits.per_ip');
+
+        // Build rate limit keys with context suffix
+        // Examples:
+        //   - secure-otp:generate:identifier:user@example.com
+        //   - secure-otp:verify:identifier:user@example.com
         $limits = [
-            "{$prefix}:identifier:{$identifier}" => config('secure-otp.rate_limits.per_identifier'),
+            "{$prefix}:{$context}:identifier:{$identifier}" => $identifierConfig,
         ];
 
         // Only apply IP rate limiting in HTTP contexts (not console/queue)
         if ($ip !== null) {
-            $limits["{$prefix}:ip:{$ip}"] = config('secure-otp.rate_limits.per_ip');
+            $limits["{$prefix}:{$context}:ip:{$ip}"] = $ipConfig;
         }
 
         foreach ($limits as $key => $config) {

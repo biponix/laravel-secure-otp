@@ -69,22 +69,42 @@ return [
     | Prefix: Customize the cache key prefix for rate limiting.
     | Useful when multiple applications share the same cache store.
     |
+    | Context-Specific Limits:
+    | You can optionally define different limits for 'generate' vs 'verify':
+    | - verify_per_identifier: Overrides per_identifier for verification
+    | - verify_per_ip: Overrides per_ip for verification
+    | If not set, falls back to the shared per_identifier and per_ip config.
+    |
     */
 
     'rate_limits' => [
         // Cache key prefix (prevent collisions in shared cache)
         'prefix' => env('OTP_RATE_LIMIT_PREFIX', 'secure-otp'),
 
-        // Per phone/email identifier (prevent spam to single user)
+        // Per phone/email identifier (shared default for generate & verify)
         'per_identifier' => [
             'max_attempts' => env('OTP_RATE_LIMIT_IDENTIFIER', 3),
             'decay_seconds' => env('OTP_RATE_LIMIT_IDENTIFIER_DECAY', 3600), // 1 hour
         ],
 
-        // Per IP address (prevent abuse from single attacker)
+        // Per IP address (shared default for generate & verify)
         'per_ip' => [
             'max_attempts' => env('OTP_RATE_LIMIT_IP', 10),
             'decay_seconds' => env('OTP_RATE_LIMIT_IP_DECAY', 3600), // 1 hour
+        ],
+
+        // Optional: Override limits specifically for verification (prevent brute force)
+        // If not set, falls back to per_identifier above
+        'verify_per_identifier' => [
+            'max_attempts' => env('OTP_VERIFY_RATE_LIMIT_IDENTIFIER', 5),
+            'decay_seconds' => env('OTP_VERIFY_RATE_LIMIT_IDENTIFIER_DECAY', 60), // 1 minute
+        ],
+
+        // Optional: Override IP limits specifically for verification
+        // If not set, falls back to per_ip above
+        'verify_per_ip' => [
+            'max_attempts' => env('OTP_VERIFY_RATE_LIMIT_IP', 20),
+            'decay_seconds' => env('OTP_VERIFY_RATE_LIMIT_IP_DECAY', 60), // 1 minute
         ],
     ],
 

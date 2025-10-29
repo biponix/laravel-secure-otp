@@ -3,7 +3,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/biponix/laravel-secure-otp.svg?style=flat-square)](https://packagist.org/packages/biponix/laravel-secure-otp)
 [![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/biponix/laravel-secure-otp/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/biponix/laravel-secure-otp/actions/workflows/run-tests.yml)
 [![GitHub Code Style Action Status](https://img.shields.io/github/actions/workflow/status/biponix/laravel-secure-otp/fix-php-code-style-issues.yml?branch=main&label=code%20style&style=flat-square)](https://github.com/biponix/laravel-secure-otp/actions/workflows/fix-php-code-style-issues.yml)
-[![Total Downloads](https://img.shields.io/packagist/dt/biponix/laravel-secure-otp.svg?style=flat-square)](https://packagist.org/packages/biponix/laravel-secure-otp)
+[![Total Downloads](https://img.shields.io/packagist/dt/biponix/laravel-secure-otp?style=flat-square)](https://packagist.org/packages/biponix/laravel-secure-otp)
 
 A production-ready, secure OTP (One-Time Password) package for Laravel applications. Generate and verify OTP codes via Email, SMS, WhatsApp, or any Laravel notification channel.
 
@@ -12,11 +12,12 @@ A production-ready, secure OTP (One-Time Password) package for Laravel applicati
 - ✅ **Production-Grade Security**: HMAC-based storage with secret key, timing-attack resistant verification
 - ✅ **Multi-Channel Support**: Email, SMS, WhatsApp, Telegram (via Laravel Notifications)
 - ✅ **Context-Safe**: Works seamlessly in HTTP, queue workers, and console commands
-- ✅ **Rate Limiting**: Smart multi-layer protection (per identifier + per IP in HTTP contexts)
+- ✅ **Context-Aware Rate Limiting**: Separate limits for generation vs verification (brute force protection)
+- ✅ **Multi-Layer Protection**: Per-identifier + per-IP rate limiting in HTTP contexts
 - ✅ **Attack Prevention**: Replay attack prevention, race condition protection with distributed cache locks
 - ✅ **Fully Customizable**: Custom notification classes, configurable expiry, length, attempts
 - ✅ **Security Logging**: Detailed audit logs with privacy-preserving PII masking
-- ✅ **100% Test Coverage**: 112 comprehensive tests ensuring reliability
+- ✅ **100% Test Coverage**: 108 comprehensive tests ensuring reliability
 - ✅ **Wide Compatibility**: PHP 8.1-8.4, Laravel 10-12
 
 ## Installation
@@ -59,20 +60,29 @@ return [
     'hash_algorithm' => env('OTP_HASH_ALGORITHM', 'sha256'),
     'hash_secret' => env('OTP_HASH_SECRET', null), // Falls back to app.key if null
 
-    // Rate limiting (set to null or false to disable specific axis)
+    // Context-aware rate limiting (separate limits for generation vs verification)
     'rate_limits' => [
         // Cache key prefix (prevents collisions in shared cache)
         'prefix' => env('OTP_RATE_LIMIT_PREFIX', 'secure-otp'),
 
-        // Per identifier rate limiting (set to null to disable)
+        // Shared defaults (used for both generate and verify if context-specific not set)
         'per_identifier' => [
             'max_attempts' => env('OTP_RATE_LIMIT_IDENTIFIER', 3),
-            'decay_seconds' => env('OTP_RATE_LIMIT_IDENTIFIER_DECAY', 3600),
+            'decay_seconds' => env('OTP_RATE_LIMIT_IDENTIFIER_DECAY', 3600), // 1 hour
         ],
-        // Per IP rate limiting (set to null/false to disable, automatically skipped in console/queue)
         'per_ip' => [
             'max_attempts' => env('OTP_RATE_LIMIT_IP', 10),
-            'decay_seconds' => env('OTP_RATE_LIMIT_IP_DECAY', 3600),
+            'decay_seconds' => env('OTP_RATE_LIMIT_IP_DECAY', 3600), // 1 hour
+        ],
+
+        // Optional: Override limits specifically for verification (prevent brute force)
+        'verify_per_identifier' => [
+            'max_attempts' => env('OTP_VERIFY_RATE_LIMIT_IDENTIFIER', 5),
+            'decay_seconds' => env('OTP_VERIFY_RATE_LIMIT_IDENTIFIER_DECAY', 60), // 1 minute
+        ],
+        'verify_per_ip' => [
+            'max_attempts' => env('OTP_VERIFY_RATE_LIMIT_IP', 20),
+            'decay_seconds' => env('OTP_VERIFY_RATE_LIMIT_IP_DECAY', 60), // 1 minute
         ],
     ],
 
@@ -302,11 +312,23 @@ OTP_HASH_SECRET=your-secret-key  // Falls back to APP_KEY if not set
 ### 2. Timing-Safe Comparison
 Uses `hash_equals()` to prevent timing attacks during verification.
 
-### 3. Context-Aware Rate Limiting
-- **Per Identifier**: Prevents spam to a single user (default: 3 attempts/hour)
-- **Per IP**: Prevents abuse from a single attacker in HTTP contexts (default: 10 attempts/hour)
-- **Smart Detection**: IP rate limiting automatically skipped in queue/console contexts to prevent all workers from sharing one rate limit slot
-- **Flexible Configuration**: Each rate limiting axis can be disabled independently by setting to `null` or `false`
+### 3. Context-Aware Rate Limiting (Brute Force Protection)
+
+**Separate rate limits for generation vs verification** to balance security and user experience:
+
+#### Generation (Sending OTP)
+- **Per Identifier**: 3 attempts/hour (prevents spam to a user)
+- **Per IP**: 10 attempts/hour (prevents mass spamming from one IP)
+
+#### Verification (Checking OTP)
+- **Per Identifier**: 5 attempts/minute (more lenient, user may typo)
+- **Per IP**: 20 attempts/minute (prevents distributed brute force across multiple accounts)
+
+**Key Features:**
+- **Smart Detection**: IP rate limiting automatically skipped in queue/console contexts
+- **Flexible Configuration**: Supports context-specific overrides (`verify_per_identifier`) or falls back to shared config
+- **Cache Key Isolation**: Uses context-aware keys (e.g., `secure-otp:verify:identifier:user@example.com`)
+- **Per-Axis Control**: Each rate limiting axis can be disabled independently by setting to `null` or `false`
 
 ### 4. Generic Responses
 Returns boolean values instead of detailed error messages to prevent enumeration attacks.
