@@ -454,7 +454,7 @@ final class SecureOtpService
         // Prevent DoS via huge identifiers
         if (strlen($identifier) > 255) {
             $this->logSecurityEvent('identifier_too_long', $identifier);
-            throw new InvalidIdentifierException('Identifier exceeds maximum length');
+            throw new InvalidIdentifierException;
         }
 
         // If no type specified or type not registered, pass through
@@ -469,7 +469,7 @@ final class SecureOtpService
         // Apply type's validation
         if (! $typeInstance->validate($normalized)) {
             $this->logSecurityEvent('type_validation_failed', $identifier, ['type' => $type]);
-            throw new InvalidIdentifierException("Identifier validation failed for type: {$type}");
+            throw new InvalidIdentifierException;
         }
 
         return $normalized;
