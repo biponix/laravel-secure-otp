@@ -28,7 +28,13 @@ You can install the package via composer:
 composer require biponix/laravel-secure-otp
 ```
 
-Publish and run the migrations:
+Run the migrations:
+
+```bash
+php artisan migrate
+```
+
+The migrations will run automatically from the package. If you need to customize the migration, you can publish it first:
 
 ```bash
 php artisan vendor:publish --tag="secure-otp-migrations"

@@ -22,7 +22,8 @@ class SecureOtpServiceProvider extends PackageServiceProvider
         $package
             ->name('laravel-secure-otp')
             ->hasConfigFile('secure-otp')
-            ->hasMigration('2025_01_01_000000_create_secure_otps_table')
+            ->hasMigration('create_secure_otps_table')
+            ->runsMigrations()
             ->hasCommand(CleanOtpsCommand::class);
     }
 

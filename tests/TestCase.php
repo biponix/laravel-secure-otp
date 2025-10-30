@@ -34,7 +34,7 @@ class TestCase extends Orchestra
         ]);
 
         // Run the migrations
-        $migration = include __DIR__.'/../database/migrations/2025_01_01_000000_create_secure_otps_table.php';
+        $migration = include __DIR__.'/../database/migrations/create_secure_otps_table.php.stub';
         $migration->up();
     }
 }
