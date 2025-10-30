@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Biponix\SecureOtp\Services;
 
+use Biponix\SecureOtp\Contracts\OtpIdentifierType;
 use Biponix\SecureOtp\Exceptions\InvalidIdentifierException;
 use Biponix\SecureOtp\Exceptions\OtpGenerationException;
 use Biponix\SecureOtp\Models\SecureOtp;
@@ -29,28 +30,64 @@ use InvalidArgumentException;
  * - Race condition protection (database transactions with locks)
  * - Detailed security logging
  * - Generic responses (prevents enumeration attacks)
+ * - Pluggable identifier types (email, phone, username, user_id, etc.)
  */
 final class SecureOtpService
 {
     /**
+     * Registered identifier types
+     *
+     * @var array<string, OtpIdentifierType>
+     */
+    protected static array $types = [];
+
+    /**
+     * Register a custom identifier type
+     *
+     * Example:
+     * ```php
+     * SecureOtpService::addType('sms', new BangladeshSmsType());
+     * SecureOtp::send('01700000000', 'sms'); // Uses BangladeshSmsType
+     * ```
+     *
+     * @param  string  $name  Type name (e.g., 'sms', 'email', 'username')
+     * @param  OtpIdentifierType  $type  Type implementation
+     */
+    public static function addType(string $name, OtpIdentifierType $type): void
+    {
+        self::$types[$name] = $type;
+    }
+
+    /**
+     * Get registered identifier type
+     */
+    public static function getType(string $name): ?OtpIdentifierType
+    {
+        return self::$types[$name] ?? null;
+    }
+
+    /**
+     * Check if a type is registered
+     */
+    public static function hasType(string $name): bool
+    {
+        return isset(self::$types[$name]);
+    }
+
+    /**
      * Generate OTP without sending (for custom delivery)
      *
-     * @param  string  $identifier  Email address or phone number
+     * @param  string  $identifier  Email, phone, username, or any identifier
+     * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
      * @return string|null OTP code, or null if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
      * @throws OtpGenerationException If OTP generation fails
      */
-    public function generate(string $identifier): ?string
+    public function generate(string $identifier, ?string $type = null): ?string
     {
-        // Normalize identifier (lowercase emails, trim whitespace)
-        $identifier = $this->normalizeIdentifier($identifier);
-
-        // Validate identifier format
-        if (! $this->isValidIdentifier($identifier)) {
-            $this->logSecurityEvent('invalid_identifier', $identifier);
-            throw new InvalidIdentifierException;
-        }
+        // Apply type-based normalization and validation
+        $identifier = $this->applyType($identifier, $type);
 
         // Check rate limits (multi-layer protection)
         $rateLimitResult = $this->checkRateLimits($identifier);
@@ -90,16 +127,18 @@ final class SecureOtpService
     /**
      * Send OTP to identifier (email, phone number) - queued
      *
-     * @param  string  $identifier  Email address or phone number
+     * @param  string  $identifier  Email, phone, username, or any identifier
+     * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
      * @return bool True if sent, false if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    public function send(string $identifier): bool
+    public function send(string $identifier, ?string $type = null): bool
     {
         return $this->sendInternal(
             $identifier,
+            $type,
             fn (OnDemandNotifiable $notifiable, Notification $notification) => $notifiable->notify($notification),
             'queued'
         );
@@ -108,16 +147,18 @@ final class SecureOtpService
     /**
      * Send OTP synchronously (blocks until sent)
      *
-     * @param  string  $identifier  Email address or phone number
+     * @param  string  $identifier  Email, phone, username, or any identifier
+     * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
      * @return bool True if sent, false if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    public function sendNow(string $identifier): bool
+    public function sendNow(string $identifier, ?string $type = null): bool
     {
         return $this->sendInternal(
             $identifier,
+            $type,
             fn (OnDemandNotifiable $notifiable, Notification $notification) => $notifiable->notifyNow($notification),
             'synchronously'
         );
@@ -126,7 +167,8 @@ final class SecureOtpService
     /**
      * Internal method to send OTP with custom notification strategy
      *
-     * @param  string  $identifier  Email address or phone number
+     * @param  string  $identifier  Email, phone, username, or any identifier
+     * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
      * @param  callable  $sendStrategy  Function to send notification
      * @param  string  $logContext  Context for logging (e.g., 'queued', 'synchronously')
      * @return bool True if sent, false if rate limited
@@ -134,19 +176,18 @@ final class SecureOtpService
      * @throws InvalidIdentifierException If identifier format is invalid
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    private function sendInternal(string $identifier, callable $sendStrategy, string $logContext): bool
+    private function sendInternal(string $identifier, ?string $type, callable $sendStrategy, string $logContext): bool
     {
-        $identifier = $this->normalizeIdentifier($identifier);
-
-        // Generate OTP (already normalized, validation happens inside)
-        $code = $this->generate($identifier);
+        // Generate OTP (applies type normalization and validation)
+        $code = $this->generate($identifier, $type);
 
         if ($code === null) {
             return false; // Rate limited
         }
 
         try {
-            $notifiable = new OnDemandNotifiable($identifier);
+            // Pass type information to notifiable (for notification's via() method)
+            $notifiable = new OnDemandNotifiable($identifier, $type);
 
             $notificationClass = config('secure-otp.notification_class', OtpNotification::class);
 
@@ -186,14 +227,22 @@ final class SecureOtpService
      * Even though each OTP has max_attempts limit, we also limit verification calls
      * to prevent attackers from rapidly trying different codes.
      *
-     * @param  string  $identifier  Phone number or email address
-     * @param  string  $code  6-digit OTP code
+     * @param  string  $identifier  Phone number, email address, username, or any identifier
+     * @param  string  $code  OTP code (length based on config)
+     * @param  string|null  $type  Identifier type (must match the type used in send())
      * @return bool True if verified successfully, false otherwise
      */
-    public function verify(string $identifier, string $code): bool
+    public function verify(string $identifier, string $code, ?string $type = null): bool
     {
-        // Normalize identifier (must match how it was stored)
-        $identifier = $this->normalizeIdentifier($identifier);
+        // Apply type-based normalization (must match how it was stored)
+        try {
+            $identifier = $this->applyType($identifier, $type);
+        } catch (InvalidIdentifierException) {
+            // Invalid identifier format - fail silently for security
+            $this->logSecurityEvent('invalid_identifier_on_verify', $identifier);
+
+            return false;
+        }
 
         // Validate code format
         $codeLength = config('secure-otp.length', 6);
@@ -383,46 +432,47 @@ final class SecureOtpService
     }
 
     /**
-     * Normalize identifier to prevent bypass via case/whitespace variations
+     * Apply type-based normalization and validation
      *
-     * Security: Ensures send('User@Example.COM') and verify('user@example.com')
-     * reference the same OTP and rate limit slot.
+     * If no type is specified or type is not registered, only security validation
+     * is applied (trim + length check). This allows any identifier to pass through
+     * without format validation.
+     *
+     * Security: Always applies basic sanitization to prevent DoS attacks.
+     *
+     * @param  string  $identifier  Raw identifier value
+     * @param  string|null  $type  Identifier type name
+     * @return string Normalized identifier
+     *
+     * @throws InvalidIdentifierException If security check fails or type validation fails
      */
-    protected function normalizeIdentifier(string $identifier): string
+    protected function applyType(string $identifier, ?string $type): string
     {
+        // Security-only validation (always applied)
         $identifier = trim($identifier);
 
-        // Email: lowercase to prevent case-based bypass
-        // Example: User@Example.COM -> user@example.com
-        if (str_contains($identifier, '@')) {
-            return strtolower($identifier);
-        }
-
-        // Phone: E.164 format is already case-insensitive, just trim
-        return $identifier;
-    }
-
-    /**
-     * Validate identifier format
-     */
-    protected function isValidIdentifier(string $identifier): bool
-    {
         // Prevent DoS via huge identifiers
         if (strlen($identifier) > 255) {
-            return false;
+            $this->logSecurityEvent('identifier_too_long', $identifier);
+            throw new InvalidIdentifierException('Identifier exceeds maximum length');
         }
 
-        // Phone: international format (E.164)
-        if (preg_match('/^\+?[1-9]\d{1,14}$/', $identifier)) {
-            return true;
+        // If no type specified or type not registered, pass through
+        if ($type === null || ! isset(self::$types[$type])) {
+            return $identifier;
         }
 
-        // Email: basic validation
-        if (filter_var($identifier, FILTER_VALIDATE_EMAIL)) {
-            return true;
+        // Apply type's normalization
+        $typeInstance = self::$types[$type];
+        $normalized = $typeInstance->normalize($identifier);
+
+        // Apply type's validation
+        if (! $typeInstance->validate($normalized)) {
+            $this->logSecurityEvent('type_validation_failed', $identifier, ['type' => $type]);
+            throw new InvalidIdentifierException("Identifier validation failed for type: {$type}");
         }
 
-        return false;
+        return $normalized;
     }
 
     /**

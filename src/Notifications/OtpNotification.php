@@ -15,8 +15,33 @@ use Illuminate\Notifications\Notification;
  * This is the default notification provided by the package.
  * You can replace it by setting OTP_NOTIFICATION_CLASS in your .env file.
  *
- * Currently supports: Email
- * Coming soon: SMS, WhatsApp, Telegram
+ * Channel Routing:
+ * - By default, sends via 'mail' channel only
+ * - To customize channel routing based on identifier type, create your own notification:
+ *
+ * Example:
+ * ```php
+ * class MyOtpNotification extends Notification
+ * {
+ *     public function __construct(public string $code) {}
+ *
+ *     public function via(object $notifiable): array
+ *     {
+ *         // Route based on identifier type
+ *         return match ($notifiable->type) {
+ *             'sms' => ['vonage'],           // Phone via SMS
+ *             'email' => ['mail'],           // Email
+ *             'whatsapp' => ['whatsapp'],    // WhatsApp
+ *             default => ['mail'],           // Fallback to email
+ *         };
+ *     }
+ *
+ *     public function toVonage($notifiable) { ... }
+ *     public function toMail($notifiable) { ... }
+ * }
+ * ```
+ *
+ * Then set: OTP_NOTIFICATION_CLASS=App\Notifications\MyOtpNotification
  */
 class OtpNotification extends Notification implements ShouldQueue
 {
@@ -33,6 +58,9 @@ class OtpNotification extends Notification implements ShouldQueue
 
     /**
      * Get the notification's delivery channels.
+     *
+     * Default implementation sends via 'mail' only.
+     * Override this method in your custom notification to route based on $notifiable->type.
      *
      * @return array<int, string>
      */

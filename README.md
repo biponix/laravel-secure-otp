@@ -11,13 +11,14 @@ A production-ready, secure OTP (One-Time Password) package for Laravel applicati
 
 - ✅ **Production-Grade Security**: HMAC-based storage with secret key, timing-attack resistant verification
 - ✅ **Multi-Channel Support**: Email, SMS, WhatsApp, Telegram (via Laravel Notifications)
+- ✅ **Pluggable Identifier Types**: Extensible validation/normalization for emails, phones, usernames, user IDs, etc.
 - ✅ **Context-Safe**: Works seamlessly in HTTP, queue workers, and console commands
 - ✅ **Context-Aware Rate Limiting**: Separate limits for generation vs verification (brute force protection)
 - ✅ **Multi-Layer Protection**: Per-identifier + per-IP rate limiting in HTTP contexts
 - ✅ **Attack Prevention**: Replay attack prevention, race condition protection with distributed cache locks
 - ✅ **Fully Customizable**: Custom notification classes, configurable expiry, length, attempts
 - ✅ **Security Logging**: Detailed audit logs with privacy-preserving PII masking
-- ✅ **100% Test Coverage**: 108 comprehensive tests ensuring reliability
+- ✅ **100% Test Coverage**: 104 comprehensive tests ensuring reliability
 - ✅ **Wide Compatibility**: PHP 8.1-8.4, Laravel 10-12
 
 ## Installation
@@ -105,7 +106,40 @@ return [
 
 ## Usage
 
-### Basic Usage
+### Quick Start
+
+**Without Type Validation (Pass-through Mode)**
+
+```php
+use Biponix\SecureOtp\Services\SecureOtpService;
+
+$otp = app(SecureOtpService::class);
+
+// Send OTP to any identifier (no validation)
+$otp->send('01700000000');        // Bangladesh phone
+$otp->send('user@example.com');   // Email
+$otp->send('username123');        // Username
+$otp->send('12345');              // User ID
+
+// Verify OTP
+$verified = $otp->verify('01700000000', '123456');
+```
+
+**With Type Validation** (Recommended for production)
+
+```php
+use Biponix\SecureOtp\Services\SecureOtpService;
+use Biponix\SecureOtp\Types\EmailType;
+
+// Register identifier types in AppServiceProvider::boot()
+SecureOtpService::addType('email', new EmailType());
+
+// Now use with type parameter
+$otp->send('user@example.com', 'email');     // ✅ Validated & normalized
+$otp->verify('user@example.com', '123456', 'email');
+```
+
+### Basic Usage Example
 
 ```php
 use Biponix\SecureOtp\Exceptions\InvalidIdentifierException;
@@ -117,7 +151,8 @@ class AuthController extends Controller
     public function sendOtp(Request $request, SecureOtpService $otp)
     {
         try {
-            $sent = $otp->send($request->email); // Returns bool
+            // Send with optional type parameter
+            $sent = $otp->send($request->email, 'email'); // Returns bool
 
             if ($sent) {
                 return response()->json([
@@ -139,7 +174,8 @@ class AuthController extends Controller
 
     public function verifyOtp(Request $request, SecureOtpService $otp)
     {
-        $verified = $otp->verify($request->email, $request->code); // Returns bool
+        // Type must match what was used in send()
+        $verified = $otp->verify($request->email, $request->code, 'email'); // Returns bool
 
         if ($verified) {
             // OTP verified successfully
@@ -169,6 +205,112 @@ public function sendCode(string $identifier): bool
 }
 ```
 
+### Custom Identifier Types
+
+Create custom identifier types for phones, usernames, or any identifier format you need.
+
+**Step 1: Create Type Class**
+
+```php
+// app/Otp/BangladeshSmsType.php
+namespace App\Otp;
+
+use Biponix\SecureOtp\Contracts\OtpIdentifierType;
+
+class BangladeshSmsType extends OtpIdentifierType
+{
+    /**
+     * Normalize Bangladesh phone numbers to E.164 format
+     */
+    public function normalize(string $value): string
+    {
+        // Remove spaces, dashes, parentheses
+        $value = preg_replace('/[\s\-\(\)]/', '', $value);
+
+        // Convert local format (01700000000) to E.164 (+8801700000000)
+        if (preg_match('/^0\d{10}$/', $value)) {
+            return '+880' . substr($value, 1);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Validate E.164 Bangladesh phone numbers
+     */
+    public function validate(string $value): bool
+    {
+        // Must be +880 followed by 10 digits
+        return preg_match('/^\+880\d{10}$/', $value) === 1;
+    }
+}
+```
+
+**Step 2: Register Type in AppServiceProvider**
+
+```php
+// app/Providers/AppServiceProvider.php
+use App\Otp\BangladeshSmsType;
+use Biponix\SecureOtp\Services\SecureOtpService;
+
+public function boot(): void
+{
+    // Register custom identifier types
+    SecureOtpService::addType('sms', new BangladeshSmsType());
+}
+```
+
+**Step 3: Use With Type Parameter**
+
+```php
+// Send OTP with validation
+$otp->send('01700000000', 'sms');      // ✅ Normalized to +8801700000000
+$otp->send('0170-000-0000', 'sms');    // ✅ Normalized to +8801700000000
+
+// Verify with same type
+$verified = $otp->verify('01700000000', '123456', 'sms');  // ✅ Works!
+```
+
+**More Examples:**
+
+```php
+// Username type
+class UsernameType extends OtpIdentifierType
+{
+    public function normalize(string $value): string
+    {
+        return strtolower(trim($value));
+    }
+
+    public function validate(string $value): bool
+    {
+        return preg_match('/^[a-z0-9_]{3,20}$/', $value) === 1;
+    }
+}
+
+// User ID type
+class UserIdType extends OtpIdentifierType
+{
+    public function normalize(string $value): string
+    {
+        return trim($value);
+    }
+
+    public function validate(string $value): bool
+    {
+        return ctype_digit($value) && (int)$value > 0;
+    }
+}
+
+// Register in AppServiceProvider
+SecureOtpService::addType('username', new UsernameType());
+SecureOtpService::addType('user_id', new UserIdType());
+
+// Usage
+$otp->send('john_doe', 'username');
+$otp->send('12345', 'user_id');
+```
+
 ### Generate Without Sending (Custom Delivery)
 
 ```php
@@ -177,7 +319,7 @@ use Biponix\SecureOtp\Services\SecureOtpService;
 public function customDelivery(SecureOtpService $otp)
 {
     // Generate OTP without sending (returns string|null)
-    $code = $otp->generate('user@example.com');
+    $code = $otp->generate('user@example.com', 'email');
 
     if ($code === null) {
         // Rate limited
@@ -219,34 +361,77 @@ $sent = SecureOtp::sendNow('user@example.com');
 
 ### Custom Notification Channels
 
-Create your own notification class to use SMS, WhatsApp, or other channels:
+Create your own notification class to route OTPs via SMS, WhatsApp, or other channels based on identifier type.
+
+**Type-Based Channel Routing:**
 
 ```php
+// app/Notifications/MultiChannelOtpNotification.php
 namespace App\Notifications;
 
+use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Messages\VonageSmsMessage;
 use Illuminate\Notifications\Notification;
 
-class SmsOtpNotification extends Notification
+class MultiChannelOtpNotification extends Notification
 {
     public function __construct(public string $code) {}
 
-    public function via($notifiable): array
+    /**
+     * Route notification channels based on identifier type
+     */
+    public function via(object $notifiable): array
     {
-        return ['twilio']; // or 'vonage', 'whatsapp', etc.
+        // $notifiable->type comes from SecureOtpService::send($identifier, $type)
+        return match ($notifiable->type) {
+            'sms' => ['vonage'],           // Phone via SMS
+            'email' => ['mail'],           // Email
+            'whatsapp' => ['whatsapp'],    // WhatsApp (if configured)
+            default => ['mail'],           // Fallback to email
+        };
     }
 
-    public function toTwilio($notifiable)
+    /**
+     * SMS notification
+     */
+    public function toVonage(object $notifiable): VonageSmsMessage
     {
-        return (new TwilioSmsMessage())
+        return (new VonageSmsMessage)
             ->content("Your verification code is: {$this->code}");
+    }
+
+    /**
+     * Email notification
+     */
+    public function toMail(object $notifiable): MailMessage
+    {
+        return (new MailMessage)
+            ->subject('Your Verification Code')
+            ->line("Your verification code is: {$this->code}")
+            ->line('This code will expire in ' . config('secure-otp.expiry_minutes', 5) . ' minutes.');
     }
 }
 ```
 
+**Register Your Notification:**
+
 Update your `.env`:
 
 ```env
-OTP_NOTIFICATION_CLASS="App\Notifications\SmsOtpNotification"
+OTP_NOTIFICATION_CLASS="App\Notifications\MultiChannelOtpNotification"
+```
+
+**Usage:**
+
+```php
+// Sends via Vonage SMS
+$otp->send('01700000000', 'sms');
+
+// Sends via Email
+$otp->send('user@example.com', 'email');
+
+// Sends via WhatsApp (if configured)
+$otp->send('+8801700000000', 'whatsapp');
 ```
 
 ### Cleanup Expired OTPs
@@ -355,68 +540,108 @@ Logs all security events (invalid codes, rate limits, etc.) with PII masking:
 
 ## API Reference
 
-### `generate(string $identifier): ?string`
+### `generate(string $identifier, ?string $type = null): ?string`
 
 Generates an OTP code without sending it (for custom delivery methods).
 
 **Parameters:**
-- `$identifier` (string): Email address or phone number (E.164 format)
+- `$identifier` (string): Email, phone, username, or any identifier
+- `$type` (string|null): Optional. Identifier type for validation/normalization (e.g., 'email', 'sms', 'username')
 
 **Returns:**
 - `string`: The generated OTP code
 - `null`: If rate limited
 
 **Throws:**
-- `InvalidIdentifierException`: If the identifier format is invalid
+- `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation fails
+
+**Examples:**
+```php
+$code = $otp->generate('user@example.com', 'email');  // With validation
+$code = $otp->generate('01700000000');                // Without validation (pass-through)
+```
 
 ---
 
-### `send(string $identifier): bool`
+### `send(string $identifier, ?string $type = null): bool`
 
 Generates and queues an OTP notification to the given identifier (non-blocking).
 
 **Parameters:**
-- `$identifier` (string): Email address or phone number (E.164 format)
+- `$identifier` (string): Email, phone, username, or any identifier
+- `$type` (string|null): Optional. Identifier type for validation/normalization
 
 **Returns:**
 - `true`: OTP sent successfully
 - `false`: Rate limited
 
 **Throws:**
-- `InvalidIdentifierException`: If the identifier format is invalid
+- `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation/sending fails
+
+**Examples:**
+```php
+$sent = $otp->send('user@example.com', 'email');    // Email with validation
+$sent = $otp->send('01700000000', 'sms');           // Phone with SMS type
+$sent = $otp->send('username123');                  // No validation
+```
 
 ---
 
-### `sendNow(string $identifier): bool`
+### `sendNow(string $identifier, ?string $type = null): bool`
 
 Generates and sends an OTP synchronously to the given identifier (blocks until sent).
 
 **Parameters:**
-- `$identifier` (string): Email address or phone number (E.164 format)
+- `$identifier` (string): Email, phone, username, or any identifier
+- `$type` (string|null): Optional. Identifier type for validation/normalization
 
 **Returns:**
 - `true`: OTP sent successfully
 - `false`: Rate limited
 
 **Throws:**
-- `InvalidIdentifierException`: If the identifier format is invalid
+- `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation/sending fails
 
 ---
 
-### `verify(string $identifier, string $code): bool`
+### `verify(string $identifier, string $code, ?string $type = null): bool`
 
 Verifies an OTP code for the given identifier.
 
 **Parameters:**
-- `$identifier` (string): Email address or phone number
-- `$code` (string): The OTP code to verify (6 digits by default)
+- `$identifier` (string): Email, phone, username, or any identifier
+- `$code` (string): The OTP code to verify (default 6 digits)
+- `$type` (string|null): Optional. Must match the type used in `send()` for normalization consistency
 
 **Returns:**
 - `true`: OTP verified successfully
 - `false`: Verification failed (invalid, expired, max attempts exceeded, etc.)
+
+**Important:** The `$type` parameter must match what was used when sending the OTP to ensure proper normalization.
+
+**Examples:**
+```php
+$verified = $otp->verify('user@example.com', '123456', 'email');
+$verified = $otp->verify('01700000000', '123456', 'sms');  // Same type as send()
+```
+
+---
+
+### `addType(string $name, OtpIdentifierType $type): void`
+
+Register a custom identifier type for validation and normalization.
+
+**Parameters:**
+- `$name` (string): Type name (e.g., 'sms', 'email', 'username')
+- `$type` (OtpIdentifierType): Type implementation
+
+**Example:**
+```php
+SecureOtpService::addType('sms', new BangladeshSmsType());
+```
 
 ---
 
@@ -440,7 +665,7 @@ Run tests with coverage (requires PCOV or Xdebug):
 composer test-coverage
 ```
 
-The package maintains **100% code coverage** with 112 comprehensive tests covering all security features, edge cases, and error scenarios.
+The package maintains **100% code coverage** with 104 comprehensive tests covering all security features, edge cases, and error scenarios.
 
 ## Changelog
 
