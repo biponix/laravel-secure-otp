@@ -7,6 +7,7 @@ namespace Biponix\SecureOtp\Services;
 use Biponix\SecureOtp\Contracts\OtpIdentifierType;
 use Biponix\SecureOtp\Exceptions\InvalidIdentifierException;
 use Biponix\SecureOtp\Exceptions\OtpGenerationException;
+use Biponix\SecureOtp\Exceptions\RateLimitExceededException;
 use Biponix\SecureOtp\Models\SecureOtp;
 use Biponix\SecureOtp\Notifications\OtpNotification;
 use Biponix\SecureOtp\Support\OnDemandNotifiable;
@@ -79,23 +80,33 @@ final class SecureOtpService
      *
      * @param  string  $identifier  Email, phone, username, or any identifier
      * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
-     * @return string|null OTP code, or null if rate limited
+     * @return string OTP code
      *
      * @throws InvalidIdentifierException If identifier format is invalid
+     * @throws RateLimitExceededException If rate limit is exceeded
      * @throws OtpGenerationException If OTP generation fails
      */
-    public function generate(string $identifier, ?string $type = null): ?string
+    public function generate(string $identifier, ?string $type = null): string
     {
-        // Apply type-based normalization and validation
         $identifier = $this->applyType($identifier, $type);
 
-        // Check rate limits (multi-layer protection)
-        $rateLimitResult = $this->checkRateLimits($identifier);
-        if (! $rateLimitResult['allowed']) {
-            $this->logSecurityEvent('rate_limit_exceeded', $identifier, $rateLimitResult);
+        return $this->generateInternal($identifier);
+    }
 
-            return null; // Rate limited - soft failure
-        }
+    /**
+     * Internal OTP generation (assumes identifier is already normalized)
+     *
+     * @param  string  $identifier  Normalized identifier
+     * @return string OTP code
+     *
+     * @throws RateLimitExceededException If rate limit is exceeded
+     * @throws OtpGenerationException If OTP generation fails
+     */
+    private function generateInternal(string $identifier): string
+    {
+        // Check rate limits (multi-layer protection)
+        // Throws RateLimitExceededException if rate limit is exceeded
+        $this->checkRateLimits($identifier);
 
         try {
             // Generate and store OTP (atomic transaction)
@@ -129,14 +140,14 @@ final class SecureOtpService
      *
      * @param  string  $identifier  Email, phone, username, or any identifier
      * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
-     * @return bool True if sent, false if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
+     * @throws RateLimitExceededException If rate limit is exceeded
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    public function send(string $identifier, ?string $type = null): bool
+    public function send(string $identifier, ?string $type = null): void
     {
-        return $this->sendInternal(
+        $this->sendInternal(
             $identifier,
             $type,
             fn (OnDemandNotifiable $notifiable, Notification $notification) => $notifiable->notify($notification),
@@ -149,14 +160,14 @@ final class SecureOtpService
      *
      * @param  string  $identifier  Email, phone, username, or any identifier
      * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
-     * @return bool True if sent, false if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
+     * @throws RateLimitExceededException If rate limit is exceeded
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    public function sendNow(string $identifier, ?string $type = null): bool
+    public function sendNow(string $identifier, ?string $type = null): void
     {
-        return $this->sendInternal(
+        $this->sendInternal(
             $identifier,
             $type,
             fn (OnDemandNotifiable $notifiable, Notification $notification) => $notifiable->notifyNow($notification),
@@ -171,23 +182,21 @@ final class SecureOtpService
      * @param  string|null  $type  Identifier type (e.g., 'email', 'sms', 'username')
      * @param  callable  $sendStrategy  Function to send notification
      * @param  string  $logContext  Context for logging (e.g., 'queued', 'synchronously')
-     * @return bool True if sent, false if rate limited
      *
      * @throws InvalidIdentifierException If identifier format is invalid
+     * @throws RateLimitExceededException If rate limit is exceeded
      * @throws OtpGenerationException If OTP generation/sending fails
      */
-    private function sendInternal(string $identifier, ?string $type, callable $sendStrategy, string $logContext): bool
+    private function sendInternal(string $identifier, ?string $type, callable $sendStrategy, string $logContext): void
     {
-        // Generate OTP (applies type normalization and validation)
-        $code = $this->generate($identifier, $type);
+        $normalizedIdentifier = $this->applyType($identifier, $type);
 
-        if ($code === null) {
-            return false; // Rate limited
-        }
+        // Generate OTP using normalized identifier (without re-normalizing)
+        // Throws RateLimitExceededException if rate limit is exceeded
+        $code = $this->generateInternal($normalizedIdentifier);
 
         try {
-            // Pass type information to notifiable (for notification's via() method)
-            $notifiable = new OnDemandNotifiable($identifier, $type);
+            $notifiable = new OnDemandNotifiable($normalizedIdentifier, $type);
 
             $notificationClass = config('secure-otp.notification_class', OtpNotification::class);
 
@@ -203,15 +212,13 @@ final class SecureOtpService
             // Log success
             if (config('secure-otp.enable_logging')) {
                 Log::info("OTP sent successfully ({$logContext})", [
-                    'identifier' => $this->maskIdentifier($identifier),
+                    'identifier' => $this->maskIdentifier($normalizedIdentifier),
                     'ip' => $this->getIpAddress(),
                 ]);
             }
-
-            return true;
         } catch (Exception $e) {
             Log::error("OTP send failed ({$logContext})", [
-                'identifier' => $this->maskIdentifier($identifier),
+                'identifier' => $this->maskIdentifier($normalizedIdentifier),
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
@@ -252,15 +259,11 @@ final class SecureOtpService
             return false;
         }
 
-        // Rate limit verification attempts (prevent brute force)
-        $rateLimitResult = $this->checkRateLimits($identifier, 'verify');
-        if (! $rateLimitResult['allowed']) {
-            $this->logSecurityEvent('verification_rate_limit_exceeded', $identifier, $rateLimitResult);
-
-            return false;
-        }
-
         try {
+            // Rate limit verification attempts (prevent brute force)
+            // Throws RateLimitExceededException - caught below and returns false for security
+            $this->checkRateLimits($identifier, 'verify');
+
             return DB::transaction(function () use ($identifier, $code): bool {
                 // Find latest valid OTP (with row lock to prevent race)
                 $otp = SecureOtp::forIdentifier($identifier)
@@ -378,9 +381,10 @@ final class SecureOtpService
      *
      * @param  string  $identifier  Email or phone number
      * @param  string  $context  Operation context: 'generate' or 'verify'
-     * @return array{allowed: bool, key?: string, available_in?: int}
+     *
+     * @throws RateLimitExceededException If rate limit is exceeded
      */
-    protected function checkRateLimits(string $identifier, string $context = 'generate'): array
+    protected function checkRateLimits(string $identifier, string $context = 'generate'): void
     {
         $ip = $this->getIpAddress();
         $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
@@ -418,17 +422,23 @@ final class SecureOtpService
             $decaySeconds = $config['decay_seconds'];
 
             if (RateLimiter::tooManyAttempts($key, $maxAttempts)) {
-                return [
-                    'allowed' => false,
+                $availableIn = RateLimiter::availableIn($key);
+
+                // Log security event before throwing
+                $this->logSecurityEvent('rate_limit_exceeded', $identifier, [
                     'key' => $key,
-                    'available_in' => RateLimiter::availableIn($key),
-                ];
+                    'available_in' => $availableIn,
+                ]);
+
+                throw new RateLimitExceededException(
+                    message: 'Rate limit exceeded. Please try again later.',
+                    availableIn: $availableIn,
+                    key: $key,
+                );
             }
 
             RateLimiter::hit($key, $decaySeconds);
         }
-
-        return ['allowed' => true];
     }
 
     /**
@@ -571,7 +581,7 @@ final class SecureOtpService
         }
 
         // Use HMAC with secret to prevent rainbow table attacks
-        // Even if attacker gets DB access, they can't reverse 6-digit codes without secret
+        // Even if attacker gets DB access, they can't reverse codes without secret
         return hash_hmac($algorithm, $code, $secret);
     }
 }

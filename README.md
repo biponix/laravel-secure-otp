@@ -143,6 +143,7 @@ $otp->verify('user@example.com', '123456', 'email');
 
 ```php
 use Biponix\SecureOtp\Exceptions\InvalidIdentifierException;
+use Biponix\SecureOtp\Exceptions\RateLimitExceededException;
 use Biponix\SecureOtp\Exceptions\OtpGenerationException;
 use Biponix\SecureOtp\Services\SecureOtpService;
 
@@ -151,22 +152,23 @@ class AuthController extends Controller
     public function sendOtp(Request $request, SecureOtpService $otp)
     {
         try {
-            // Send with optional type parameter
-            $sent = $otp->send($request->email, 'email'); // Returns bool
+            // Send OTP (throws on error)
+            $otp->send($request->email, 'email');
 
-            if ($sent) {
-                return response()->json([
-                    'message' => 'If this is a valid email, you will receive a code.'
-                ]);
-            }
-
-            // Rate limited
             return response()->json([
-                'message' => 'Too many requests. Please try again later.'
+                'message' => 'OTP sent successfully'
+            ]);
+
+        } catch (RateLimitExceededException $e) {
+            // Rate limit exceeded
+            return response()->json([
+                'error' => 'Too many requests',
+                'retry_after' => $e->getRetryAfter(),
             ], 429);
 
         } catch (InvalidIdentifierException $e) {
-            return response()->json(['error' => 'Invalid email address'], 422);
+            return response()->json(['error' => 'Invalid email address'], 400);
+
         } catch (OtpGenerationException $e) {
             return response()->json(['error' => 'Failed to send OTP'], 500);
         }
@@ -174,8 +176,8 @@ class AuthController extends Controller
 
     public function verifyOtp(Request $request, SecureOtpService $otp)
     {
-        // Type must match what was used in send()
-        $verified = $otp->verify($request->email, $request->code, 'email'); // Returns bool
+        // verify() returns bool (doesn't expose why it failed for security)
+        $verified = $otp->verify($request->email, $request->code, 'email');
 
         if ($verified) {
             // OTP verified successfully
@@ -199,9 +201,10 @@ public function __construct(
     private SecureOtpService $otp
 ) {}
 
-public function sendCode(string $identifier): bool
+public function sendCode(string $identifier): void
 {
-    return $this->otp->send($identifier);
+    // Throws exceptions on error
+    $this->otp->send($identifier);
 }
 ```
 
@@ -315,19 +318,24 @@ $otp->send('12345', 'user_id');
 
 ```php
 use Biponix\SecureOtp\Services\SecureOtpService;
+use Biponix\SecureOtp\Exceptions\RateLimitExceededException;
 
 public function customDelivery(SecureOtpService $otp)
 {
-    // Generate OTP without sending (returns string|null)
-    $code = $otp->generate('user@example.com', 'email');
+    try {
+        // Generate OTP without sending (returns string)
+        $code = $otp->generate('user@example.com', 'email');
 
-    if ($code === null) {
-        // Rate limited
-        return;
+        // Deliver via your custom method
+        $this->sendViaSms($code);
+
+    } catch (RateLimitExceededException $e) {
+        // Handle rate limiting
+        return response()->json([
+            'error' => 'Too many requests',
+            'retry_after' => $e->getRetryAfter(),
+        ], 429);
     }
-
-    // Deliver via your custom method
-    $this->sendViaSms($code);
 }
 ```
 
@@ -346,17 +354,17 @@ $otp->sendNow('user@example.com');
 ```php
 use Biponix\SecureOtp\Facades\SecureOtp;
 
-// Send OTP (returns bool)
-$sent = SecureOtp::send('user@example.com');
+// Send OTP (throws exceptions on error)
+SecureOtp::send('user@example.com');
 
 // Verify OTP (returns bool)
 $verified = SecureOtp::verify('user@example.com', '123456');
 
-// Generate without sending (returns string|null)
+// Generate without sending (returns string, throws on rate limit)
 $code = SecureOtp::generate('user@example.com');
 
-// Send synchronously
-$sent = SecureOtp::sendNow('user@example.com');
+// Send synchronously (throws exceptions on error)
+SecureOtp::sendNow('user@example.com');
 ```
 
 ### Custom Notification Channels
@@ -540,7 +548,7 @@ Logs all security events (invalid codes, rate limits, etc.) with PII masking:
 
 ## API Reference
 
-### `generate(string $identifier, ?string $type = null): ?string`
+### `generate(string $identifier, ?string $type = null): string`
 
 Generates an OTP code without sending it (for custom delivery methods).
 
@@ -550,21 +558,25 @@ Generates an OTP code without sending it (for custom delivery methods).
 
 **Returns:**
 - `string`: The generated OTP code
-- `null`: If rate limited
 
 **Throws:**
+- `RateLimitExceededException`: If rate limit is exceeded
 - `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation fails
 
 **Examples:**
 ```php
-$code = $otp->generate('user@example.com', 'email');  // With validation
-$code = $otp->generate('01700000000');                // Without validation (pass-through)
+try {
+    $code = $otp->generate('user@example.com', 'email');  // With validation
+    $code = $otp->generate('01700000000');                // Without validation
+} catch (RateLimitExceededException $e) {
+    // Handle rate limiting: $e->getRetryAfter() gives seconds until retry
+}
 ```
 
 ---
 
-### `send(string $identifier, ?string $type = null): bool`
+### `send(string $identifier, ?string $type = null): void`
 
 Generates and queues an OTP notification to the given identifier (non-blocking).
 
@@ -573,23 +585,27 @@ Generates and queues an OTP notification to the given identifier (non-blocking).
 - `$type` (string|null): Optional. Identifier type for validation/normalization
 
 **Returns:**
-- `true`: OTP sent successfully
-- `false`: Rate limited
+- `void`
 
 **Throws:**
+- `RateLimitExceededException`: If rate limit is exceeded
 - `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation/sending fails
 
 **Examples:**
 ```php
-$sent = $otp->send('user@example.com', 'email');    // Email with validation
-$sent = $otp->send('01700000000', 'sms');           // Phone with SMS type
-$sent = $otp->send('username123');                  // No validation
+try {
+    $otp->send('user@example.com', 'email');    // Email with validation
+    $otp->send('01700000000', 'sms');           // Phone with SMS type
+    $otp->send('username123');                  // No validation
+} catch (RateLimitExceededException $e) {
+    // Return HTTP 429 with retry_after header
+}
 ```
 
 ---
 
-### `sendNow(string $identifier, ?string $type = null): bool`
+### `sendNow(string $identifier, ?string $type = null): void`
 
 Generates and sends an OTP synchronously to the given identifier (blocks until sent).
 
@@ -598,10 +614,10 @@ Generates and sends an OTP synchronously to the given identifier (blocks until s
 - `$type` (string|null): Optional. Identifier type for validation/normalization
 
 **Returns:**
-- `true`: OTP sent successfully
-- `false`: Rate limited
+- `void`
 
 **Throws:**
+- `RateLimitExceededException`: If rate limit is exceeded
 - `InvalidIdentifierException`: If security check fails or type validation fails
 - `OtpGenerationException`: If OTP generation/sending fails
 
@@ -665,7 +681,7 @@ Run tests with coverage (requires PCOV or Xdebug):
 composer test-coverage
 ```
 
-The package maintains **100% code coverage** with 104 comprehensive tests covering all security features, edge cases, and error scenarios.
+The package maintains **100% code coverage** with 103 comprehensive tests covering all security features, edge cases, and error scenarios.
 
 ## Changelog
 

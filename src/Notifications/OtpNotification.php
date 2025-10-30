@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Biponix\SecureOtp\Notifications;
 
+use Biponix\SecureOtp\Support\OnDemandNotifiable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -21,13 +22,15 @@ use Illuminate\Notifications\Notification;
  *
  * Example:
  * ```php
+ * use Biponix\SecureOtp\Support\OnDemandNotifiable;
+ *
  * class MyOtpNotification extends Notification
  * {
  *     public function __construct(public string $code) {}
  *
- *     public function via(object $notifiable): array
+ *     public function via(OnDemandNotifiable $notifiable): array
  *     {
- *         // Route based on identifier type
+ *         // Route based on identifier type (from SecureOtpService::send($id, $type))
  *         return match ($notifiable->type) {
  *             'sms' => ['vonage'],           // Phone via SMS
  *             'email' => ['mail'],           // Email
@@ -36,8 +39,8 @@ use Illuminate\Notifications\Notification;
  *         };
  *     }
  *
- *     public function toVonage($notifiable) { ... }
- *     public function toMail($notifiable) { ... }
+ *     public function toVonage(OnDemandNotifiable $notifiable) { ... }
+ *     public function toMail(OnDemandNotifiable $notifiable) { ... }
  * }
  * ```
  *
@@ -64,7 +67,7 @@ class OtpNotification extends Notification implements ShouldQueue
      *
      * @return array<int, string>
      */
-    public function via(object $notifiable): array
+    public function via(OnDemandNotifiable $notifiable): array
     {
         return ['mail'];
     }
@@ -72,7 +75,7 @@ class OtpNotification extends Notification implements ShouldQueue
     /**
      * Get the mail representation of the notification.
      */
-    public function toMail(object $notifiable): MailMessage
+    public function toMail(OnDemandNotifiable $notifiable): MailMessage
     {
         $expiryMinutes = config('secure-otp.expiry_minutes', 5);
 

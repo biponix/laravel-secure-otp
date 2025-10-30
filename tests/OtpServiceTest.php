@@ -54,9 +54,7 @@ beforeEach(function () {
 
 describe('send() method - Success Cases', function () {
     it('sends OTP to any identifier in pass-through mode', function () {
-        $result = $this->otpService->send('test@example.com');
-
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp)->not->toBeNull()
@@ -121,8 +119,7 @@ describe('Validation with Identifier Types', function () {
 
     it('accepts any identifier without type validation (pass-through mode)', function () {
         // Pass-through mode: no type = no validation
-        $result = $this->otpService->send('invalid-email');
-        expect($result)->toBeTrue();
+        $this->otpService->send('invalid-email');
 
         $otp = SecureOtp::query()->where('identifier', 'invalid-email')->first();
         expect($otp)->not->toBeNull();
@@ -134,13 +131,13 @@ describe('send() method - Rate Limiting', function () {
     it('enforces per-identifier rate limit', function () {
         config(['secure-otp.rate_limits.per_identifier.max_attempts' => 2]);
 
-        $result1 = $this->otpService->send('test@example.com');
-        $result2 = $this->otpService->send('test@example.com');
-        $result3 = $this->otpService->send('test@example.com');
+        // First two should succeed
+        $this->otpService->send('test@example.com');
+        $this->otpService->send('test@example.com');
 
-        expect($result1)->toBeTrue()
-            ->and($result2)->toBeTrue()
-            ->and($result3)->toBeFalse();
+        // Third should throw RateLimitExceededException
+        expect(fn () => $this->otpService->send('test@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
     });
 
     it('applies IP rate limiting when IP is available', function () {
@@ -153,35 +150,34 @@ describe('send() method - Rate Limiting', function () {
         $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
         RateLimiter::clear("{$prefix}:ip:192.168.1.1");
 
-        $result1 = $this->otpService->send('user1@example.com');
-        $result2 = $this->otpService->send('user2@example.com');
-        $result3 = $this->otpService->send('user3@example.com');
+        // First 2 should succeed
+        $this->otpService->send('user1@example.com');
+        $this->otpService->send('user2@example.com');
 
-        // First 2 should succeed, 3rd should be rate limited by IP
-        expect($result1)->toBeTrue()
-            ->and($result2)->toBeTrue()
-            ->and($result3)->toBeFalse();
+        // 3rd should be rate limited by IP
+        expect(fn () => $this->otpService->send('user3@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
     });
 
     it('rate limits are independent per identifier', function () {
         config(['secure-otp.rate_limits.per_identifier.max_attempts' => 1]);
 
+        // user1: first succeeds, second should be rate limited
         $this->otpService->send('user1@example.com');
-        $result1 = $this->otpService->send('user1@example.com');
+        expect(fn () => $this->otpService->send('user1@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
 
-        $result2 = $this->otpService->send('user2@example.com');
-
-        expect($result1)->toBeFalse()
-            ->and($result2)->toBeTrue();
+        // user2: independent rate limit, should succeed
+        $this->otpService->send('user2@example.com');
     });
 
     it('allows disabling per_identifier or per_ip rate limiting independently', function () {
         // Test per_identifier disabled
         config(['secure-otp.rate_limits.per_identifier' => null]);
 
+        // Should allow unlimited sends
         for ($i = 0; $i < 5; $i++) {
-            $result = $this->otpService->send('test@example.com');
-            expect($result)->toBeTrue();
+            $this->otpService->send('test@example.com');
         }
 
         // Reset and test per_ip disabled (per_identifier still active)
@@ -194,15 +190,14 @@ describe('send() method - Rate Limiting', function () {
         $prefix = config('secure-otp.rate_limits.prefix', 'secure-otp');
         RateLimiter::clear("{$prefix}:generate:identifier:test2@example.com");
 
-        $result1 = $this->otpService->send('test2@example.com');
-        $result2 = $this->otpService->send('test2@example.com');
-        $result3 = $this->otpService->send('test2@example.com');
-        $result4 = $this->otpService->send('test2@example.com');
+        // First 3 should succeed
+        $this->otpService->send('test2@example.com');
+        $this->otpService->send('test2@example.com');
+        $this->otpService->send('test2@example.com');
 
-        expect($result1)->toBeTrue()
-            ->and($result2)->toBeTrue()
-            ->and($result3)->toBeTrue()
-            ->and($result4)->toBeFalse(); // Rate limited by per_identifier only
+        // 4th should be rate limited by per_identifier only
+        expect(fn () => $this->otpService->send('test2@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
     });
 });
 
@@ -247,6 +242,7 @@ describe('verify() method - Success Cases', function () {
         $this->travel(9)->minutes();
 
         $result = $this->otpService->verify('test@example.com', $code);
+
         expect($result)->toBeTrue();
     });
 });
@@ -460,9 +456,7 @@ describe('Helper Methods', function () {
 
     it('masks identifier for logging', function () {
         Log::spy();
-        $result = $this->otpService->send('test@example.com');
-
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         // Should log twice: generate() + send()
         Log::shouldHaveReceived('info')
@@ -532,16 +526,17 @@ describe('Edge Cases', function () {
         app()->forgetInstance('request');
 
         // Should work fine without IP/user agent tracking
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp)->not->toBeNull();
     });
 
     it('handles special characters in identifier', function () {
-        $result = $this->otpService->send('test+tag@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test+tag@example.com');
+
+        $otp = SecureOtp::query()->where('identifier', 'test+tag@example.com')->first();
+        expect($otp)->not->toBeNull();
     });
 
     it('respects logging configuration', function () {
@@ -549,14 +544,12 @@ describe('Edge Cases', function () {
 
         // Test logging disabled
         config(['secure-otp.enable_logging' => false]);
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
         Log::shouldNotHaveReceived('info');
 
         // Test logging enabled
         config(['secure-otp.enable_logging' => true]);
-        $result2 = $this->otpService->send('test2@example.com');
-        expect($result2)->toBeTrue();
+        $this->otpService->send('test2@example.com');
         // Should log twice: generate() + send()
         Log::shouldHaveReceived('info')->twice();
     });
@@ -618,8 +611,7 @@ describe('Edge Cases', function () {
         Log::spy();
 
         // Create OTP first
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         // Mock DB to throw exception
         DB::shouldReceive('transaction')
@@ -687,13 +679,12 @@ describe('Security Enhancements', function () {
 
         // Send OTPs up to the limit
         for ($i = 0; $i < 3; $i++) {
-            $result = $this->otpService->send('test@example.com');
-            expect($result)->toBeTrue();
+            $this->otpService->send('test@example.com');
         }
 
-        // Next attempt should be rate limited
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeFalse();
+        // Next attempt should throw RateLimitExceededException
+        expect(fn () => $this->otpService->send('test@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
 
         // Verify the custom prefix was used by checking hits (includes context 'generate')
         expect(RateLimiter::attempts('custom-prefix:generate:identifier:test@example.com'))->toBeGreaterThan(0);
@@ -727,16 +718,31 @@ describe('generate() method', function () {
         expect($otp)->not->toBeNull();
     });
 
-    it('returns null when rate limited', function () {
+    it('throws RateLimitExceededException when rate limited', function () {
         // Generate 3 times to hit rate limit
         for ($i = 0; $i < 3; $i++) {
             $this->otpService->generate('test@example.com');
         }
 
-        // 4th attempt should be rate limited
-        $result = $this->otpService->generate('test@example.com');
+        // 4th attempt should throw RateLimitExceededException
+        expect(fn () => $this->otpService->generate('test@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class, 'Rate limit exceeded');
+    });
 
-        expect($result)->toBeNull();
+    it('includes retry information in RateLimitExceededException', function () {
+        // Generate 3 times to hit rate limit
+        for ($i = 0; $i < 3; $i++) {
+            $this->otpService->generate('test@example.com');
+        }
+
+        // 4th attempt should throw exception with retry info
+        try {
+            $this->otpService->generate('test@example.com');
+            expect(false)->toBeTrue('Exception should have been thrown');
+        } catch (\Biponix\SecureOtp\Exceptions\RateLimitExceededException $e) {
+            expect($e->getRetryAfter())->toBeInt()->toBeGreaterThan(0);
+            expect($e->getRateLimitKey())->toBeString()->toContain('secure-otp:generate:identifier');
+        }
     });
 
     it('logs generation event', function () {
@@ -785,9 +791,7 @@ describe('generate() method', function () {
 
 describe('sendNow() method', function () {
     it('sends OTP synchronously', function () {
-        $result = $this->otpService->sendNow('test@example.com');
-
-        expect($result)->toBeTrue();
+        $this->otpService->sendNow('test@example.com');
 
         // Verify OTP was stored
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
@@ -802,9 +806,7 @@ describe('sendNow() method', function () {
 
     it('uses notifyNow instead of notify', function () {
         Log::spy();
-        $result = $this->otpService->sendNow('test@example.com');
-
-        expect($result)->toBeTrue();
+        $this->otpService->sendNow('test@example.com');
 
         Log::shouldHaveReceived('info')
             ->with(
@@ -813,16 +815,15 @@ describe('sendNow() method', function () {
             );
     });
 
-    it('returns false when rate limited', function () {
+    it('throws RateLimitExceededException when rate limited', function () {
         // Send 3 times to hit rate limit
         for ($i = 0; $i < 3; $i++) {
             $this->otpService->sendNow('test@example.com');
         }
 
-        // 4th attempt should be rate limited
-        $result = $this->otpService->sendNow('test@example.com');
-
-        expect($result)->toBeFalse();
+        // 4th attempt should throw RateLimitExceededException
+        expect(fn () => $this->otpService->sendNow('test@example.com'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
     });
 
     it('can verify OTP sent synchronously', function () {
@@ -834,6 +835,7 @@ describe('sendNow() method', function () {
 
         // Verify
         $result = $this->otpService->verify('test@example.com', $code);
+
         expect($result)->toBeTrue();
     });
 
@@ -855,8 +857,7 @@ describe('Security Fix: Identifier Normalization', function () {
         SecureOtpService::addType('email', new \Biponix\SecureOtp\Types\EmailType);
 
         // Send with uppercase email
-        $result = $this->otpService->send('User@Example.COM', 'email');
-        expect($result)->toBeTrue();
+        $this->otpService->send('User@Example.COM', 'email');
 
         // Should be stored as lowercase
         $otp = SecureOtp::query()->where('identifier', 'user@example.com')->first();
@@ -882,8 +883,7 @@ describe('Security Fix: Identifier Normalization', function () {
 
     it('trims whitespace from identifiers (security-only validation)', function () {
         // Send with whitespace - trimming always happens (security check)
-        $result = $this->otpService->send('  test@example.com  ');
-        expect($result)->toBeTrue();
+        $this->otpService->send('  test@example.com  ');
 
         // Should be stored without whitespace (trimmed)
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
@@ -909,31 +909,46 @@ describe('Security Fix: Identifier Normalization', function () {
         RateLimiter::clear("{$prefix}:generate:identifier:test@example.com");
 
         // First two should succeed (same normalized identifier)
-        $result1 = $this->otpService->send('test@example.com', 'email');
-        $result2 = $this->otpService->send('Test@Example.COM', 'email');
-
-        expect($result1)->toBeTrue()
-            ->and($result2)->toBeTrue();
+        $this->otpService->send('test@example.com', 'email');
+        $this->otpService->send('Test@Example.COM', 'email');
 
         // Third should be rate limited (same normalized identifier)
-        $result3 = $this->otpService->send('TEST@EXAMPLE.COM', 'email');
-        expect($result3)->toBeFalse();
+        expect(fn () => $this->otpService->send('TEST@EXAMPLE.COM', 'email'))
+            ->toThrow(\Biponix\SecureOtp\Exceptions\RateLimitExceededException::class);
+    });
+
+    it('sends notification to normalized identifier not raw', function () {
+        // Register email type for normalization
+        SecureOtpService::addType('email', new \Biponix\SecureOtp\Types\EmailType);
+
+        // Send with uppercase email
+        $this->otpService->send('User@Example.COM', 'email');
+
+        // Verify notification was sent to NORMALIZED identifier (lowercase)
+        Notification::assertSentTo(
+            new OnDemandNotifiable('user@example.com', 'email'),
+            OtpNotification::class
+        );
+
+        // Verify notification was NOT sent to raw uppercase identifier
+        Notification::assertNotSentTo(
+            new OnDemandNotifiable('User@Example.COM', 'email'),
+            OtpNotification::class
+        );
     });
 });
 
 describe('Security Fix: Race Condition Prevention', function () {
     it('prevents multiple live OTPs with Cache::lock()', function () {
         // This test verifies that Cache::lock() prevents concurrent OTP generation
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         // Get first OTP ID
         $otp1 = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp1)->not->toBeNull();
 
         // Send again - should invalidate first OTP and create new one
-        $result2 = $this->otpService->send('test@example.com');
-        expect($result2)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         // First OTP should be marked as verified (invalidated)
         $otp1->refresh();
@@ -985,8 +1000,7 @@ describe('Security Fix: Hash Secret Validation', function () {
     it('uses hash secret from config', function () {
         config(['secure-otp.hash_secret' => 'my-custom-secret']);
 
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp->code_hash)->not->toBeNull();
@@ -996,8 +1010,7 @@ describe('Security Fix: Hash Secret Validation', function () {
         config(['secure-otp.hash_secret' => null]);
         config(['app.key' => 'base64:'.base64_encode(random_bytes(32))]);
 
-        $result = $this->otpService->send('test@example.com');
-        expect($result)->toBeTrue();
+        $this->otpService->send('test@example.com');
 
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp->code_hash)->not->toBeNull();
@@ -1038,8 +1051,7 @@ describe('Identifier Type System', function () {
         SecureOtpService::addType('test', $type);
 
         // Test that default normalize() (trim) is used
-        $result = $this->otpService->send('  test@example.com  ', 'test');
-        expect($result)->toBeTrue();
+        $this->otpService->send('  test@example.com  ', 'test');
 
         $otp = SecureOtp::query()->where('identifier', 'test@example.com')->first();
         expect($otp)->not->toBeNull();
