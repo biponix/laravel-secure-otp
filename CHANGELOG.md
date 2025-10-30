@@ -2,6 +2,79 @@
 
 All notable changes to `laravel-simple-otp` will be documented in this file.
 
+## Title: v1.0.0 - Production-Ready OTP Package - 2025-10-30
+
+### Laravel Secure OTP v1.0.0
+
+Production-ready OTP package for Laravel with multi-channel support, pluggable identifier types, and comprehensive security features.
+
+#### 🚀 Highlights
+
+- **🔐 Production-Grade Security**: HMAC storage, timing-attack resistant, rate limiting, replay prevention
+- **🔌 Pluggable Identifier Types**: Support emails, phones, usernames, user IDs - or create custom types
+- **📧 Multi-Channel Support**: Email, SMS, WhatsApp, Telegram via Laravel Notifications
+- **⚡ Exception-Based API**: Clear error handling with specific exception types
+- **🛡️ Context-Aware Rate Limiting**: Separate limits for generation vs verification (brute force protection)
+- **🧪 100% Test Coverage**: 103 comprehensive tests covering all security features
+- **📱 Laravel 10, 11, 12**: PHP 8.1-8.4 support
+
+#### 📦 Installation
+
+  ```bash
+  composer require biponix/laravel-secure-otp
+php artisan migrate
+
+⚡ Quick Start
+
+Basic Usage:
+$otp = app(SecureOtpService::class);
+$otp->send('user@example.com');
+$verified = $otp->verify('user@example.com', '123456');
+
+With Type Validation:
+SecureOtpService::addType('email', new EmailType());
+$otp->send('user@example.com', 'email'); // Validated & normalized
+
+Custom Type (Bangladesh Phones):
+class BangladeshSmsType extends OtpIdentifierType {
+    public function normalize(string $value): string {
+        // Convert 01700000000 → +8801700000000
+    }
+}
+
+SecureOtpService::addType('sms', new BangladeshSmsType());
+$otp->send('01700000000', 'sms');
+
+🔐 Security Features
+
+- ✅ HMAC-based storage (SHA-256)
+- ✅ Timing-attack resistant verification
+- ✅ Race condition protection (distributed locks)
+- ✅ Replay attack prevention
+- ✅ Multi-layer rate limiting (per-identifier + per-IP)
+- ✅ Enumeration protection (generic responses)
+- ✅ Security logging with PII masking
+
+📚 Documentation
+
+Full documentation: https://github.com/biponix/laravel-secure-otp#readme
+
+🧪 Quality
+
+- 103 tests with 100% code coverage
+- PHPStan level 9 compliant
+- Laravel Pint code style
+- Comprehensive edge case testing
+
+💡 Use Cases
+
+- Two-factor authentication (2FA)
+- Email/phone verification
+- Passwordless login
+- Transaction confirmation
+- Password reset flows
+
+  ```
 ## v1.0.0 - Production-Ready OTP Package - 2025-01-30
 
 ### Initial Release
@@ -51,6 +124,7 @@ All generation and sending methods throw specific exceptions instead of returnin
 - `OtpGenerationException` - Generation/sending failures
 
 This provides:
+
 - Clear, explicit error handling
 - Type-safe method signatures (`void` returns)
 - Easy HTTP status code mapping (429, 400, 500)
@@ -105,6 +179,7 @@ Generates an OTP code without sending it.
   - `RateLimitExceededException` - If rate limit exceeded
   - `InvalidIdentifierException` - If identifier format invalid
   - `OtpGenerationException` - If generation fails
+  
 
 **`send(string $identifier, ?string $type = null): void`**
 
@@ -115,6 +190,7 @@ Generates and queues an OTP notification (non-blocking).
   - `RateLimitExceededException` - If rate limit exceeded
   - `InvalidIdentifierException` - If identifier format invalid
   - `OtpGenerationException` - If sending fails
+  
 
 **`sendNow(string $identifier, ?string $type = null): void`**
 
@@ -179,8 +255,8 @@ class AuthController extends Controller
         return response()->json(['error' => 'Invalid or expired code'], 422);
     }
 }
-```
 
+```
 **Custom Identifier Types**
 
 ```php
@@ -207,8 +283,8 @@ SecureOtpService::addType('sms', new BangladeshSmsType());
 
 // Use with type
 $otp->send('01700000000', 'sms'); // Normalized to +8801700000000
-```
 
+```
 #### ⚙️ Configuration Options
 
 - OTP length (default: 6 digits)
@@ -236,6 +312,6 @@ $otp->send('01700000000', 'sms'); // Normalized to +8801700000000
 composer require biponix/laravel-secure-otp
 php artisan migrate
 php artisan vendor:publish --tag="secure-otp-config"
-```
 
+```
 See [README.md](README.md) for complete documentation.
