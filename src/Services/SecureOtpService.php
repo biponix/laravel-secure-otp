@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Biponix\SecureOtp\Services;
 
 use Biponix\SecureOtp\Contracts\OtpIdentifierType;
+use Biponix\SecureOtp\Contracts\OtpService;
 use Biponix\SecureOtp\Exceptions\InvalidIdentifierException;
 use Biponix\SecureOtp\Exceptions\OtpGenerationException;
 use Biponix\SecureOtp\Exceptions\RateLimitExceededException;
@@ -33,7 +34,7 @@ use InvalidArgumentException;
  * - Generic responses (prevents enumeration attacks)
  * - Pluggable identifier types (email, phone, username, user_id, etc.)
  */
-final class SecureOtpService
+final class SecureOtpService implements OtpService
 {
     /**
      * Registered identifier types

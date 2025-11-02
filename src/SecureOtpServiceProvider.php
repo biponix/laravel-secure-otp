@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Biponix\SecureOtp;
 
 use Biponix\SecureOtp\Commands\CleanOtpsCommand;
+use Biponix\SecureOtp\Contracts\OtpService;
 use Biponix\SecureOtp\Services\SecureOtpService;
 use Illuminate\Contracts\Foundation\Application;
 use Spatie\LaravelPackageTools\Package;
@@ -27,14 +28,15 @@ class SecureOtpServiceProvider extends PackageServiceProvider
             ->hasCommand(CleanOtpsCommand::class);
     }
 
+    /**
+     * @codeCoverageIgnore
+     */
     public function packageRegistered(): void
     {
-        // Register SecureOtpService as singleton
-        $this->app->singleton(SecureOtpService::class, function (Application $app) {
+        $this->app->singleton(OtpService::class, function (Application $app) {
             return new SecureOtpService;
         });
 
-        // Register alias for easier access
-        $this->app->alias(SecureOtpService::class, 'secure-otp');
+        $this->app->alias(OtpService::class, 'secure-otp');
     }
 }
