@@ -2,6 +2,26 @@
 
 All notable changes to `laravel-simple-otp` will be documented in this file.
 
+## Laravel 13 Support - 2026-04-13
+
+
+---
+
+What's Changed
+
+- Add Laravel 13 support
+
+Dependency Updates
+
+- Bump actions/checkout from 5 to 6
+- Bump dependabot/fetch-metadata from 2.4.0 to 3.0.0
+- Bump ramsey/composer-install from 3 to 4
+
+Full Changelog: https://github.com/biponix/laravel-simple-otp/compare/v1.1.0...v1.2.0
+
+
+---
+
 ## Title: v1.0.0 - Production-Ready OTP Package - 2025-10-30
 
 ### Laravel Secure OTP v1.0.0
@@ -37,9 +57,9 @@ $otp->send('user@example.com', 'email'); // Validated & normalized
 
 Custom Type (Bangladesh Phones):
 class BangladeshSmsType extends OtpIdentifierType {
-    public function normalize(string $value): string {
-        // Convert 01700000000 → +8801700000000
-    }
+  public function normalize(string $value): string {
+      // Convert 01700000000 → +8801700000000
+  }
 }
 
 SecureOtpService::addType('sms', new BangladeshSmsType());
@@ -73,6 +93,7 @@ Full documentation: https://github.com/biponix/laravel-secure-otp#readme
 - Passwordless login
 - Transaction confirmation
 - Password reset flows
+
 
   ```
 ## v1.0.0 - Production-Ready OTP Package - 2025-01-30
@@ -256,6 +277,7 @@ class AuthController extends Controller
     }
 }
 
+
 ```
 **Custom Identifier Types**
 
@@ -283,6 +305,7 @@ SecureOtpService::addType('sms', new BangladeshSmsType());
 
 // Use with type
 $otp->send('01700000000', 'sms'); // Normalized to +8801700000000
+
 
 ```
 #### ⚙️ Configuration Options
@@ -312,6 +335,7 @@ $otp->send('01700000000', 'sms'); // Normalized to +8801700000000
 composer require biponix/laravel-secure-otp
 php artisan migrate
 php artisan vendor:publish --tag="secure-otp-config"
+
 
 ```
 See [README.md](README.md) for complete documentation.
